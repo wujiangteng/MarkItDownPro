@@ -4,6 +4,8 @@ MarkItDownPro is a local document-to-Markdown tool built on top of several open-
 
 The goal is not to fork or replace the upstream projects. MarkItDownPro is an integration layer that keeps upstream packages as editable dependencies under `vendor/`, then adds a PDF pipeline that improves reading order, figures, tables, formulas, and local model/cache management.
 
+The current implementation focuses on enhanced PDF-to-Markdown conversion. DOCX conversion is not implemented in MarkItDownPro yet; it is planned as a follow-up feature.
+
 ## Relationship to Upstream Projects
 
 MarkItDownPro combines these projects:
@@ -14,6 +16,16 @@ MarkItDownPro combines these projects:
 - [PyMuPDF](https://pymupdf.readthedocs.io/): used directly by MarkItDownPro for PDF text ordering, region rendering, table detection, and PDF repair fallbacks.
 
 This repository keeps those upstream packages in a minimal vendored form so the integration can be developed and tested locally without changing global Python packages. Project-specific logic lives in `src/markitdownpro/`.
+
+## PDF Conversion Preview
+
+Original two-column academic PDF:
+
+![Original PDF page](docs/assets/bastankhah2014-original-pdf.png)
+
+Converted Markdown preview with reconstructed section structure, reading order, and formula rendering:
+
+![Converted Markdown preview](docs/assets/bastankhah2014-markdown-output.png)
 
 ## What MarkItDownPro Adds
 
