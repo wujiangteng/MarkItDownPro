@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "markitdownpro"
+version = "0.1.0"
+description = "A MarkItDown-based converter with enhanced academic PDF layout, formula, table, and image handling."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "markitdown",
+    "pdf2zh",
+    "texteller",
+]
+
+[project.scripts]
+markitdownpro = "markitdownpro.cli:main"
+
+[tool.uv.sources]
+markitdown = { path = "vendor/markitdown", editable = true }
+pdf2zh = { path = "vendor/pdf2zh", editable = true }
+texteller = { path = "vendor/texteller", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/markitdownpro"]
