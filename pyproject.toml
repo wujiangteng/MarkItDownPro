@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "A MarkItDown-based converter with enhanced academic PDF layout, formula, table, and image handling."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "lxml",
     "markitdown",
+    "mammoth~=1.11.0",
     "pdf2zh",
     "texteller",
 ]

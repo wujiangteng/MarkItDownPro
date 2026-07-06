@@ -4,7 +4,7 @@ MarkItDownPro is a local document-to-Markdown tool built on top of several open-
 
 The goal is not to fork or replace the upstream projects. MarkItDownPro is an integration layer that keeps upstream packages as editable dependencies under `vendor/`, then adds a PDF pipeline that improves reading order, figures, tables, formulas, and local model/cache management.
 
-The current implementation focuses on enhanced PDF-to-Markdown conversion. DOCX conversion is not implemented in MarkItDownPro yet; it is planned as a follow-up feature.
+The current implementation focuses on enhanced PDF-to-Markdown conversion and basic DOCX-to-Markdown conversion. PDF files use the custom layout-aware pipeline; DOCX files are converted through MarkItDown's DOCX converter.
 
 ## Relationship to Upstream Projects
 
@@ -35,8 +35,9 @@ Converted Markdown preview with reconstructed section structure, reading order, 
   markitdownpro path/to/input.pdf
   ```
 
-- Default output under `output/<input_stem>.md`.
-- Extracted image assets under `output/<input_stem>_assets/`.
+- Default output under `output/<short_input_stem>/<short_input_stem>.md`.
+- A copy of the original source file saved in the same output folder.
+- Extracted PDF image assets under `output/<short_input_stem>/<short_input_stem>_assets/`.
 - Project-local model cache under `.cache/`, avoiding scattered user-level model files.
 - Layout-aware PDF conversion for academic papers and technical documents.
 - Better handling for double-column PDFs.
@@ -62,6 +63,8 @@ Converted Markdown preview with reconstructed section structure, reading order, 
 
 `examples/`, `output/`, `.cache/`, and `.venv/` are intentionally ignored by Git.
 
+Long input names are shortened with regex-based cleanup and an 8-character hash suffix. The same shortened stem is used for the output folder, Markdown file, copied source file, and PDF asset folder.
+
 ## Installation
 
 Use Python 3.12 and `uv`:
@@ -72,16 +75,28 @@ uv sync
 
 ## Usage
 
-Convert a PDF and write the result to `output/<input_stem>.md`:
+Convert a PDF and write the result to `output/<short_input_stem>/<short_input_stem>.md`:
 
 ```bash
 uv run markitdownpro path/to/input.pdf
+```
+
+Convert a DOCX file:
+
+```bash
+uv run markitdownpro path/to/input.docx
 ```
 
 Write to a specific file:
 
 ```bash
 uv run markitdownpro path/to/input.pdf -o path/to/output.md
+```
+
+Write to a specific output directory:
+
+```bash
+uv run markitdownpro path/to/input.pdf -o path/to/output-folder
 ```
 
 Disable formula OCR for a faster pass:
