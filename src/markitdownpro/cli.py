@@ -88,6 +88,8 @@ def _normalize_argv(argv: list[str]) -> list[str]:
 def _convert(args: argparse.Namespace) -> int:
     output, output_dir, output_stem = _resolve_output_layout(args.input, args.output)
     assets_dir = _resolve_assets_dir(output_dir, output_stem, args.assets_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _reset_assets_dir(assets_dir, output_dir, output_stem, args.assets_dir)
 
     converter = MarkItDownPro(
         pdf_mode=args.pdf_mode,
@@ -98,7 +100,6 @@ def _convert(args: argparse.Namespace) -> int:
     result = converter.convert(args.input)
     markdown = _sanitize_markdown(result.markdown)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     _copy_source_file(args.input, output_dir, output_stem)
     output.write_text(markdown, encoding="utf-8")
     print(output)
@@ -147,6 +148,20 @@ def _copy_source_file(source: str, output_dir: Path, output_stem: str) -> None:
     if source_path.resolve() == target.resolve():
         return
     shutil.copy2(source_path, target)
+
+
+def _reset_assets_dir(
+    assets_dir: Path,
+    output_dir: Path,
+    output_stem: str,
+    explicit_assets_dir: str | None,
+) -> None:
+    if explicit_assets_dir is not None:
+        return
+    expected = output_dir / f"{output_stem}_assets"
+    if assets_dir != expected or not assets_dir.exists():
+        return
+    shutil.rmtree(assets_dir)
 
 
 def _simplify_stem(stem: str) -> str:

@@ -37,7 +37,7 @@ Converted Markdown preview with reconstructed section structure, reading order, 
 
 - Default output under `output/<short_input_stem>/<short_input_stem>.md`.
 - A copy of the original source file saved in the same output folder.
-- Extracted PDF image assets under `output/<short_input_stem>/<short_input_stem>_assets/`.
+- Extracted PDF and DOCX image assets under `output/<short_input_stem>/<short_input_stem>_assets/`.
 - Project-local model cache under `.cache/`, avoiding scattered user-level model files.
 - Layout-aware PDF conversion for academic papers and technical documents.
 - Better handling for double-column PDFs.

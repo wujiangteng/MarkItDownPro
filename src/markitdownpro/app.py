@@ -10,6 +10,7 @@ configure_project_cache()
 
 from markitdown import MarkItDown
 
+from .docx_converter import EnhancedDocxConverter
 from .pdf_converter import EnhancedPdfConverter
 
 
@@ -25,6 +26,15 @@ class MarkItDownPro:
     ) -> None:
         configure_project_cache()
         self._markitdown = MarkItDown(**kwargs)
+        self._markitdown.register_converter(
+            EnhancedDocxConverter(
+                assets_dir=Path(assets_dir) if assets_dir is not None else None,
+                assets_base_dir=Path(assets_base_dir)
+                if assets_base_dir is not None
+                else None,
+            ),
+            priority=-1.0,
+        )
         self._markitdown.register_converter(
             EnhancedPdfConverter(
                 mode=pdf_mode,

@@ -511,6 +511,8 @@ class EnhancedPdfConverter(DocumentConverter):
             latex = self._recognize_formula(page, region)
             if latex:
                 content = f"$$\n{latex}\n$$"
+            else:
+                return "<!-- formula OCR unavailable -->"
 
         elif region.label == "table":
             return self._region_asset_markdown(page, page_number, region_index, region)
