@@ -45,6 +45,7 @@ Converted Markdown preview with reconstructed section structure, reading order, 
 - Figure extraction as Markdown image references.
 - Table regions rendered as images when table-to-Markdown extraction is unreliable.
 - Basic heading detection for numbered academic sections and Chinese technical documents.
+- DOCX heading restoration from Word outline levels and custom heading styles.
 - PDF repair fallback for some malformed resource dictionaries seen in real-world PDFs.
 
 ## Layout

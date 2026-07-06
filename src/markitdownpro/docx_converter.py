@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+from zipfile import ZipFile
 from pathlib import Path
 from typing import Any, BinaryIO
+from xml.etree import ElementTree as ET
 
 import mammoth
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
@@ -13,6 +16,7 @@ DOCX_EXTENSIONS = {".docx"}
 DOCX_MIME_PREFIXES = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 )
+WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 IMAGE_EXTENSIONS = {
     "image/gif": ".gif",
@@ -53,14 +57,72 @@ class EnhancedDocxConverter(DocumentConverter):
         stream_info: StreamInfo,
         **kwargs: Any,
     ) -> DocumentConverterResult:
-        style_map = kwargs.get("style_map", None)
-        pre_processed = pre_process_docx(file_stream)
+        self._image_index = 0
+        docx_bytes = file_stream.read()
+        style_map = self._style_map(docx_bytes, kwargs.get("style_map", None))
+        pre_processed = pre_process_docx(io.BytesIO(docx_bytes))
         result = mammoth.convert_to_html(
             pre_processed,
             style_map=style_map,
             convert_image=mammoth.images.img_element(self._image_attributes),
         )
         return self._html_converter.convert_string(result.value, **kwargs)
+
+    def _style_map(self, docx_bytes: bytes, user_style_map: str | None) -> str | None:
+        generated = self._heading_style_map(docx_bytes)
+        maps = [value for value in [generated, user_style_map] if value]
+        return "\n".join(maps) if maps else None
+
+    def _heading_style_map(self, docx_bytes: bytes) -> str | None:
+        try:
+            with ZipFile(io.BytesIO(docx_bytes)) as archive:
+                styles = ET.fromstring(archive.read("word/styles.xml"))
+                document = ET.fromstring(archive.read("word/document.xml"))
+        except Exception:
+            return None
+
+        names: dict[str, str] = {}
+        levels: dict[str, int] = {}
+        for style in styles.findall(".//w:style", WORD_NS):
+            if style.attrib.get(f"{{{WORD_NS['w']}}}type") != "paragraph":
+                continue
+            style_id = style.attrib.get(f"{{{WORD_NS['w']}}}styleId")
+            if not style_id:
+                continue
+            name = style.find("w:name", WORD_NS)
+            if name is not None:
+                names[style_id] = name.attrib.get(f"{{{WORD_NS['w']}}}val", "")
+            outline = style.find(".//w:outlineLvl", WORD_NS)
+            if outline is not None:
+                levels[style_id] = int(outline.attrib.get(f"{{{WORD_NS['w']}}}val", "0"))
+
+        for paragraph in document.findall(".//w:body/w:p", WORD_NS):
+            properties = paragraph.find("w:pPr", WORD_NS)
+            if properties is None:
+                continue
+            style = properties.find("w:pStyle", WORD_NS)
+            outline = properties.find("w:outlineLvl", WORD_NS)
+            if style is None or outline is None:
+                continue
+            style_id = style.attrib.get(f"{{{WORD_NS['w']}}}val")
+            if not style_id:
+                continue
+            level = int(outline.attrib.get(f"{{{WORD_NS['w']}}}val", "0"))
+            levels[style_id] = min(level, levels.get(style_id, level))
+
+        lines: list[str] = []
+        for style_id, level in sorted(levels.items(), key=lambda item: item[1]):
+            name = names.get(style_id, "")
+            if not name or name.lower().startswith("toc"):
+                continue
+            heading_level = min(level + 1, 6)
+            lines.append(
+                f"p[style-name='{self._style_map_string(name)}'] => h{heading_level}:fresh"
+            )
+        return "\n".join(lines) or None
+
+    def _style_map_string(self, value: str) -> str:
+        return value.replace("\\", "\\\\").replace("'", "\\'")
 
     def _image_attributes(self, image: Any) -> dict[str, str]:
         if self.assets_dir is None:
