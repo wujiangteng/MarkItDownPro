@@ -1181,6 +1181,7 @@ dependencies = [
     { name = "mammoth" },
     { name = "markitdown" },
     { name = "pdf2zh" },
+    { name = "pillow" },
     { name = "texteller" },
 ]
 
@@ -1190,6 +1191,7 @@ requires-dist = [
     { name = "mammoth", specifier = "~=1.11.0" },
     { name = "markitdown", editable = "vendor/markitdown" },
     { name = "pdf2zh", editable = "vendor/pdf2zh" },
+    { name = "pillow" },
     { name = "texteller", editable = "vendor/texteller" },
 ]
 

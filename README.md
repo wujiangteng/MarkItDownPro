@@ -46,6 +46,7 @@ Converted Markdown preview with reconstructed section structure, reading order, 
 - Table regions rendered as images when table-to-Markdown extraction is unreliable.
 - Basic heading detection for numbered academic sections and Chinese technical documents.
 - DOCX heading restoration from Word outline levels and custom heading styles.
+- DOCX unsupported vector images such as EMF/WMF are preserved as original assets and represented by displayable PNG placeholders.
 - PDF repair fallback for some malformed resource dictionaries seen in real-world PDFs.
 
 ## Layout

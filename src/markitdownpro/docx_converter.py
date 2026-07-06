@@ -7,6 +7,7 @@ from typing import Any, BinaryIO
 from xml.etree import ElementTree as ET
 
 import mammoth
+from PIL import Image, ImageDraw
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
 from markitdown.converter_utils.docx.pre_process import pre_process_docx
 from markitdown.converters._html_converter import HtmlConverter
@@ -26,6 +27,12 @@ IMAGE_EXTENSIONS = {
     "image/tiff": ".tiff",
     "image/x-emf": ".emf",
     "image/x-wmf": ".wmf",
+}
+DISPLAYABLE_IMAGE_EXTENSIONS = {
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/svg+xml": ".svg",
 }
 
 
@@ -130,13 +137,54 @@ class EnhancedDocxConverter(DocumentConverter):
 
         self.assets_dir.mkdir(parents=True, exist_ok=True)
         self._image_index += 1
-        extension = IMAGE_EXTENSIONS.get(image.content_type, ".bin")
-        path = self.assets_dir / f"image-{self._image_index:04d}{extension}"
-
-        with image.open() as image_stream:
-            path.write_bytes(image_stream.read())
-
+        path = self._save_image_asset(image)
         return {"src": self._asset_markdown_path(path)}
+
+    def _save_image_asset(self, image: Any) -> Path:
+        with image.open() as image_stream:
+            image_bytes = image_stream.read()
+
+        if image.content_type in DISPLAYABLE_IMAGE_EXTENSIONS:
+            extension = DISPLAYABLE_IMAGE_EXTENSIONS[image.content_type]
+            path = self.assets_dir / f"image-{self._image_index:04d}{extension}"
+            path.write_bytes(image_bytes)
+            return path
+
+        if image.content_type == "image/tiff":
+            converted = self.assets_dir / f"image-{self._image_index:04d}.png"
+            try:
+                Image.open(io.BytesIO(image_bytes)).save(converted)
+                return converted
+            except Exception:
+                pass
+
+        extension = IMAGE_EXTENSIONS.get(image.content_type, ".bin")
+        raw_path = self.assets_dir / f"image-{self._image_index:04d}{extension}"
+        raw_path.write_bytes(image_bytes)
+
+        placeholder = self.assets_dir / f"image-{self._image_index:04d}.png"
+        self._save_unsupported_image_placeholder(placeholder, raw_path.name, image.content_type)
+        return placeholder
+
+    def _save_unsupported_image_placeholder(
+        self,
+        path: Path,
+        original_name: str,
+        content_type: str,
+    ) -> None:
+        canvas = Image.new("RGB", (1000, 300), "white")
+        draw = ImageDraw.Draw(canvas)
+        lines = [
+            "Unsupported embedded image format",
+            f"Format: {content_type or 'unknown'}",
+            f"Original asset saved as: {original_name}",
+        ]
+        y = 70
+        for line in lines:
+            draw.text((60, y), line, fill=(40, 40, 40))
+            y += 55
+        draw.rectangle((20, 20, 980, 280), outline=(180, 180, 180), width=2)
+        canvas.save(path)
 
     def _asset_markdown_path(self, path: Path) -> str:
         if self.assets_base_dir is None:

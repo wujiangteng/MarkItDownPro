@@ -11,6 +11,7 @@ dependencies = [
     "lxml",
     "markitdown",
     "mammoth~=1.11.0",
+    "pillow",
     "pdf2zh",
     "texteller",
 ]
