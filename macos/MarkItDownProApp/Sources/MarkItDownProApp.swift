@@ -1,0 +1,486 @@
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+@main
+struct MarkItDownProApp: App {
+    @StateObject private var settings = AppSettings()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(settings)
+                .frame(minWidth: 760, minHeight: 520)
+        }
+        .windowStyle(.titleBar)
+    }
+}
+
+final class AppSettings: ObservableObject {
+    @Published var outputFolder: String {
+        didSet { UserDefaults.standard.set(outputFolder, forKey: "outputFolder") }
+    }
+    @Published var modelFolder: String {
+        didSet { UserDefaults.standard.set(modelFolder, forKey: "modelFolder") }
+    }
+    @Published var commandPath: String {
+        didSet { UserDefaults.standard.set(commandPath, forKey: "commandPath") }
+    }
+
+    init() {
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads")
+        let defaultOutput = downloads.appendingPathComponent("maritdown-output").path
+        let defaultCommand = "/Users/wudong/Code/Tools/markitdownpro/.venv/bin/markitdownpro"
+
+        outputFolder = UserDefaults.standard.string(forKey: "outputFolder") ?? defaultOutput
+        modelFolder = UserDefaults.standard.string(forKey: "modelFolder") ?? ""
+        commandPath = UserDefaults.standard.string(forKey: "commandPath") ?? defaultCommand
+    }
+}
+
+@MainActor
+final class ConversionModel: ObservableObject {
+    enum State: Equatable {
+        case idle
+        case running
+        case succeeded
+        case failed
+    }
+
+    @Published var selectedFile: URL?
+    @Published var state: State = .idle
+    @Published var progress: Double = 0
+    @Published var estimatedSeconds: TimeInterval = 0
+    @Published var elapsedSeconds: TimeInterval = 0
+    @Published var outputText = ""
+    @Published var outputPath: String?
+    @Published var errorMessage: String?
+
+    private var process: Process?
+    private var timer: Timer?
+    private var startedAt: Date?
+
+    var isRunning: Bool {
+        state == .running
+    }
+
+    func selectFile(_ url: URL, settings: AppSettings) {
+        guard !isRunning else { return }
+        selectedFile = url
+        start(settings: settings)
+    }
+
+    func start(settings: AppSettings) {
+        guard let selectedFile, !isRunning else { return }
+
+        state = .running
+        progress = 0
+        elapsedSeconds = 0
+        estimatedSeconds = estimateDuration(for: selectedFile)
+        outputText = ""
+        outputPath = nil
+        errorMessage = nil
+        startedAt = Date()
+
+        let outputFolder = URL(fileURLWithPath: settings.outputFolder)
+        do {
+            try FileManager.default.createDirectory(
+                at: outputFolder,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            fail("无法创建输出目录：\(error.localizedDescription)")
+            return
+        }
+
+        let executable = URL(fileURLWithPath: settings.commandPath)
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = [
+            selectedFile.path,
+            "-o",
+            outputFolder.path,
+        ]
+
+        var environment = ProcessInfo.processInfo.environment
+        if !settings.modelFolder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            environment["MARKITDOWNPRO_CACHE_DIR"] = settings.modelFolder
+        }
+        process.environment = environment
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        self.process = process
+
+        stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            Task { @MainActor in
+                self?.appendOutput(text)
+            }
+        }
+        stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            Task { @MainActor in
+                self?.appendOutput(text)
+            }
+        }
+
+        process.terminationHandler = { [weak self] process in
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+            Task { @MainActor in
+                self?.finish(exitCode: process.terminationStatus)
+            }
+        }
+
+        do {
+            try process.run()
+            startTimer()
+        } catch {
+            fail("无法启动转换命令：\(error.localizedDescription)")
+        }
+    }
+
+    func cancel() {
+        guard isRunning else { return }
+        process?.terminate()
+        fail("已取消转换。")
+    }
+
+    private func appendOutput(_ text: String) {
+        outputText += text
+        let lines = outputText
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        if let path = lines.last(where: { $0.hasSuffix(".md") }) {
+            outputPath = path
+        }
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.state == .running, let startedAt = self.startedAt else { return }
+                self.elapsedSeconds = Date().timeIntervalSince(startedAt)
+                if self.estimatedSeconds > 0 {
+                    self.progress = min(0.95, self.elapsedSeconds / self.estimatedSeconds)
+                }
+            }
+        }
+    }
+
+    private func finish(exitCode: Int32) {
+        timer?.invalidate()
+        timer = nil
+        process = nil
+        elapsedSeconds = Date().timeIntervalSince(startedAt ?? Date())
+
+        if exitCode == 0 {
+            state = .succeeded
+            progress = 1
+            if outputPath == nil {
+                outputPath = outputText
+                    .split(whereSeparator: \.isNewline)
+                    .map(String.init)
+                    .last(where: { $0.hasSuffix(".md") })
+            }
+        } else {
+            fail("转换失败，退出码：\(exitCode)")
+        }
+    }
+
+    private func fail(_ message: String) {
+        timer?.invalidate()
+        timer = nil
+        process = nil
+        state = .failed
+        errorMessage = message
+        progress = 0
+    }
+
+    private func estimateDuration(for url: URL) -> TimeInterval {
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let megabytes = max(Double(size) / 1_048_576.0, 0.1)
+        switch url.pathExtension.lowercased() {
+        case "pdf":
+            return max(20, min(600, 25 + megabytes * 8))
+        case "docx":
+            return max(6, min(180, 5 + megabytes * 1.5))
+        default:
+            return max(5, min(120, 4 + megabytes))
+        }
+    }
+}
+
+struct ContentView: View {
+    @EnvironmentObject private var settings: AppSettings
+    @StateObject private var model = ConversionModel()
+    @State private var isTargeted = false
+    @State private var showingSettings = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            Divider()
+            VStack(spacing: 18) {
+                dropZone
+                statusPanel
+                outputPanel
+            }
+            .padding(22)
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+                .environmentObject(settings)
+        }
+    }
+
+    private var toolbar: some View {
+        HStack {
+            Text("MarkItDownPro")
+                .font(.system(size: 18, weight: .semibold))
+            Spacer()
+            Button {
+                showingSettings = true
+            } label: {
+                Label("设置", systemImage: "gearshape")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
+
+    private var dropZone: some View {
+        VStack(spacing: 14) {
+            Image(systemName: model.isRunning ? "arrow.triangle.2.circlepath" : "doc.badge.plus")
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
+            Text(model.selectedFile?.lastPathComponent ?? "拖拽 PDF 或 DOCX 到这里")
+                .font(.system(size: 18, weight: .medium))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            Text("也可以点击选择文件，选择后会立即开始处理。")
+                .foregroundStyle(.secondary)
+            HStack {
+                Button {
+                    pickFile()
+                } label: {
+                    Label("选择文件", systemImage: "folder")
+                }
+                .disabled(model.isRunning)
+
+                if model.isRunning {
+                    Button(role: .cancel) {
+                        model.cancel()
+                    } label: {
+                        Label("取消", systemImage: "xmark")
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 210)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isTargeted ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isTargeted ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
+        )
+        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            guard !model.isRunning else { return false }
+            guard let provider = providers.first else { return false }
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                guard let data = item as? Data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil)
+                else { return }
+                Task { @MainActor in
+                    model.selectFile(url, settings: settings)
+                }
+            }
+            return true
+        }
+    }
+
+    private var statusPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(statusText)
+                    .font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Text(timeText)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            ProgressView(value: model.progress)
+                .progressViewStyle(.linear)
+            if let error = model.errorMessage {
+                Text(error)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var outputPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("输出")
+                    .font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button {
+                    openOutputFolder()
+                } label: {
+                    Label("打开输出文件夹", systemImage: "arrow.up.forward.app")
+                }
+            }
+            Text(model.outputPath ?? settings.outputFolder)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+            ScrollView {
+                Text(model.outputText.isEmpty ? "转换日志会显示在这里。" : model.outputText)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(minHeight: 120)
+            .padding(10)
+            .background(Color(nsColor: .textBackgroundColor))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.2))
+            )
+        }
+    }
+
+    private var statusText: String {
+        switch model.state {
+        case .idle:
+            return "等待文件"
+        case .running:
+            return "正在转换"
+        case .succeeded:
+            return "转换完成"
+        case .failed:
+            return "转换失败"
+        }
+    }
+
+    private var timeText: String {
+        if model.state == .running {
+            return "已用 \(format(model.elapsedSeconds)) / 预计 \(format(model.estimatedSeconds))"
+        }
+        if model.estimatedSeconds > 0 {
+            return "耗时 \(format(model.elapsedSeconds))"
+        }
+        return ""
+    }
+
+    private func pickFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "pdf")!,
+            UTType(filenameExtension: "docx")!,
+        ]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url {
+            model.selectFile(url, settings: settings)
+        }
+    }
+
+    private func openOutputFolder() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: settings.outputFolder))
+    }
+
+    private func format(_ seconds: TimeInterval) -> String {
+        let seconds = max(0, Int(seconds.rounded()))
+        let minutes = seconds / 60
+        let remaining = seconds % 60
+        if minutes > 0 {
+            return "\(minutes)m \(remaining)s"
+        }
+        return "\(remaining)s"
+    }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject private var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("设置")
+                .font(.system(size: 20, weight: .semibold))
+
+            settingRow(
+                title: "模型文件夹",
+                subtitle: "对应 MARKITDOWNPRO_CACHE_DIR。留空时使用命令自身默认缓存。模型不会打包进应用。",
+                value: $settings.modelFolder,
+                chooseDirectory: true
+            )
+
+            settingRow(
+                title: "输出文件夹",
+                subtitle: "默认是下载文件夹中的 markitdown-output。",
+                value: $settings.outputFolder,
+                chooseDirectory: true
+            )
+
+            settingRow(
+                title: "转换命令",
+                subtitle: "默认使用当前项目虚拟环境中的 markitdownpro。",
+                value: $settings.commandPath,
+                chooseDirectory: false
+            )
+
+            HStack {
+                Spacer()
+                Button("完成") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 640)
+    }
+
+    private func settingRow(
+        title: String,
+        subtitle: String,
+        value: Binding<String>,
+        chooseDirectory: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+            Text(subtitle)
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            HStack {
+                TextField("", text: value)
+                    .textFieldStyle(.roundedBorder)
+                Button("选择") {
+                    choose(value: value, directory: chooseDirectory)
+                }
+            }
+        }
+    }
+
+    private func choose(value: Binding<String>, directory: Bool) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = directory
+        panel.canChooseFiles = !directory
+        if panel.runModal() == .OK, let url = panel.url {
+            value.wrappedValue = url.path
+        }
+    }
+}

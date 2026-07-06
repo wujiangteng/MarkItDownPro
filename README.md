@@ -113,6 +113,33 @@ The explicit subcommand form is also supported:
 uv run markitdownpro convert path/to/input.pdf -o path/to/output.md
 ```
 
+## macOS App
+
+A simple SwiftUI macOS wrapper is available under `macos/MarkItDownProApp/`.
+
+The app supports:
+
+- Dragging a PDF or DOCX file into the window.
+- Clicking to choose a file; conversion starts immediately after selection.
+- Choosing a model/cache folder in Settings. The app passes it to the CLI through `MARKITDOWNPRO_CACHE_DIR`, so models do not need to be bundled inside the app.
+- Choosing an output folder in Settings. By default the app writes to `~/Downloads/maritdown-output`.
+- Showing an estimated conversion time and a progress bar while the CLI is running. The estimate is file-size based, so it is approximate.
+
+Build the app bundle:
+
+```bash
+cd macos/MarkItDownProApp
+./build-app.sh
+```
+
+The generated app is written to:
+
+```text
+macos/MarkItDownProApp/.build/MarkItDownPro.app
+```
+
+The Settings window also includes an advanced command path field. It defaults to this repository's `.venv/bin/markitdownpro`; update it if the app is moved to another machine or the CLI is installed somewhere else.
+
 ## Model Cache
 
 Runtime model downloads are kept inside the project by default:
