@@ -95,7 +95,8 @@ Write to a specific file:
 uv run markitdownpro path/to/input.pdf -o path/to/output.md
 ```
 
-Write to a specific output directory:
+Write under a specific output root directory. MarkItDownPro still creates a
+`<short_input_stem>/` folder inside that root:
 
 ```bash
 uv run markitdownpro path/to/input.pdf -o path/to/output-folder
@@ -123,6 +124,7 @@ The app supports:
 - Clicking to choose a file; conversion starts immediately after selection.
 - Choosing a model/cache folder in Settings. The app passes it to the CLI through `MARKITDOWNPRO_CACHE_DIR`, so models do not need to be bundled inside the app.
 - Choosing an output folder in Settings. By default the app writes to `~/Downloads/markitdown-output`.
+  Each converted file is saved in its own subfolder under that output folder.
 - Toggling PDF formula OCR before conversion.
 - Showing stage-based progress while the CLI is running. PDF progress follows the current processed page over total pages, then finishes with Markdown generation and file writing stages; DOCX progress follows reading, heading restoration, image extraction, Markdown generation, and file writing stages.
 - Folding or expanding the command-line log output.
@@ -133,6 +135,9 @@ Build the app bundle:
 cd macos/MarkItDownProApp
 ./build-app.sh
 ```
+
+If `macos/MarkItDownProApp/Resources/AppIcon.icns` exists, the build script
+copies it into the app bundle as the application icon.
 
 The generated app is written to:
 

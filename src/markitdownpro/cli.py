@@ -155,7 +155,7 @@ def _resolve_output_layout(source: str, value: str | None) -> tuple[Path, Path, 
             output_dir = output.parent
             output_stem = _simplify_stem(output.stem or output_stem)
         else:
-            output_dir = path
+            output_dir = path if path.name == output_stem else path / output_stem
             output = output_dir / f"{output_stem}.md"
         return output, output_dir, output_stem
 
