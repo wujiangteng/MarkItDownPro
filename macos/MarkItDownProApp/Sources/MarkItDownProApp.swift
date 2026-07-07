@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 @main
 struct MarkItDownProApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settings = AppSettings()
 
     var body: some Scene {
@@ -14,6 +15,12 @@ struct MarkItDownProApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 560, height: 420)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 }
 
