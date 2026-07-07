@@ -145,7 +145,13 @@ The generated app is written to:
 macos/MarkItDownProApp/.build/MarkItDownPro.app
 ```
 
-The Settings window also includes an advanced command path field. It defaults to this repository's `.venv/bin/markitdownpro`; update it if the app is moved to another machine or the CLI is installed somewhere else.
+The Settings window also includes an advanced command path field. In the
+packaged app it defaults to the bundled `markitdownpro-cli` launcher; during
+local development it falls back to this repository's `.venv/bin/markitdownpro`.
+
+The app bundle is built as a lightweight package: it includes the Python 3.12
+runtime, the project `.venv`, and MarkItDownPro source/vendor code inside the
+bundle. Model files are not bundled; choose the model/cache folder in Settings.
 
 ## Model Cache
 

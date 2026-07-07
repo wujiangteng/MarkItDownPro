@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 @main
 struct MarkItDownProApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settings = AppSettings()
 
     var body: some Scene {
@@ -14,6 +15,12 @@ struct MarkItDownProApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 560, height: 420)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 }
 
@@ -36,14 +43,23 @@ final class AppSettings: ObservableObject {
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads")
         let defaultOutput = downloads.appendingPathComponent("markitdown-output").path
         let defaultModel = "/Users/wudong/Code/Tools/markitdownpro/.cache"
-        let defaultCommand = "/Users/wudong/Code/Tools/markitdownpro/.venv/bin/markitdownpro"
+        let devCommand = "/Users/wudong/Code/Tools/markitdownpro/.venv/bin/markitdownpro"
+        let defaultCommand = Self.bundledCommandPath() ?? devCommand
 
         let savedOutput = UserDefaults.standard.string(forKey: "outputFolder")
         outputFolder = savedOutput?.hasSuffix("/maritdown-output") == true ? defaultOutput : (savedOutput ?? defaultOutput)
         let savedModel = UserDefaults.standard.string(forKey: "modelFolder")
         modelFolder = savedModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? savedModel! : defaultModel
-        commandPath = UserDefaults.standard.string(forKey: "commandPath") ?? defaultCommand
+        let savedCommand = UserDefaults.standard.string(forKey: "commandPath")
+        commandPath = savedCommand == devCommand ? defaultCommand : (savedCommand ?? defaultCommand)
         enableFormulaOCR = UserDefaults.standard.object(forKey: "enableFormulaOCR") as? Bool ?? true
+    }
+
+    private static func bundledCommandPath() -> String? {
+        guard let url = Bundle.main.url(forAuxiliaryExecutable: "markitdownpro-cli") else {
+            return nil
+        }
+        return url.path
     }
 }
 
