@@ -11,9 +11,10 @@ struct MarkItDownProApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(settings)
-                .frame(minWidth: 640, minHeight: 430)
+                .frame(width: 560, height: 420)
         }
         .windowStyle(.titleBar)
+        .defaultSize(width: 560, height: 420)
     }
 }
 
@@ -34,11 +35,14 @@ final class AppSettings: ObservableObject {
     init() {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads")
-        let defaultOutput = downloads.appendingPathComponent("maritdown-output").path
+        let defaultOutput = downloads.appendingPathComponent("markitdown-output").path
+        let defaultModel = "/Users/wudong/Code/Tools/markitdownpro/.cache"
         let defaultCommand = "/Users/wudong/Code/Tools/markitdownpro/.venv/bin/markitdownpro"
 
-        outputFolder = UserDefaults.standard.string(forKey: "outputFolder") ?? defaultOutput
-        modelFolder = UserDefaults.standard.string(forKey: "modelFolder") ?? ""
+        let savedOutput = UserDefaults.standard.string(forKey: "outputFolder")
+        outputFolder = savedOutput?.hasSuffix("/maritdown-output") == true ? defaultOutput : (savedOutput ?? defaultOutput)
+        let savedModel = UserDefaults.standard.string(forKey: "modelFolder")
+        modelFolder = savedModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? savedModel! : defaultModel
         commandPath = UserDefaults.standard.string(forKey: "commandPath") ?? defaultCommand
         enableFormulaOCR = UserDefaults.standard.object(forKey: "enableFormulaOCR") as? Bool ?? true
     }
@@ -241,14 +245,15 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            Divider()
-            VStack(spacing: 14) {
+            VStack(spacing: 12) {
                 dropZone
                 statusPanel
                 outputPanel
             }
-            .padding(18)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 16)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $showingSettings) {
             SettingsView()
                 .environmentObject(settings)
@@ -257,37 +262,63 @@ struct ContentView: View {
 
     private var toolbar: some View {
         HStack {
-            Text("MarkItDownPro")
-                .font(.system(size: 18, weight: .semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("MarkItDownPro")
+                    .font(.system(size: 17, weight: .semibold))
+                Text("PDF / DOCX 转 Markdown")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
+
+            Toggle("公式 OCR", isOn: $settings.enableFormulaOCR)
+                .toggleStyle(.switch)
+                .disabled(model.isRunning)
+
             Button {
                 showingSettings = true
             } label: {
-                Label("设置", systemImage: "gearshape")
+                Image(systemName: "gearshape")
             }
+            .buttonStyle(.bordered)
+            .help("设置模型和输出路径")
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
     }
 
     private var dropZone: some View {
-        VStack(spacing: 10) {
-            Image(systemName: model.isRunning ? "arrow.triangle.2.circlepath" : "doc.badge.plus")
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
-            Text(model.selectedFile?.lastPathComponent ?? "拖拽 PDF 或 DOCX 到这里")
-                .font(.system(size: 18, weight: .medium))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            Text("也可以点击选择文件，选择后会立即开始处理。")
-                .foregroundStyle(.secondary)
-            HStack {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(isTargeted ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.10))
+                    .frame(width: 54, height: 54)
+                Image(systemName: model.isRunning ? "arrow.triangle.2.circlepath" : "doc.badge.plus")
+                    .font(.system(size: 25, weight: .medium))
+                    .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(model.selectedFile?.lastPathComponent ?? "拖拽 PDF 或 DOCX 到这里")
+                    .font(.system(size: 16, weight: .semibold))
+                    .lineLimit(2)
+                Text(model.selectedFile == nil ? "点击选择文件后会立即开始处理。" : "文件已载入，正在准备转换。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(spacing: 8) {
                 Button {
                     pickFile()
                 } label: {
                     Label("选择文件", systemImage: "folder")
                 }
                 .disabled(model.isRunning)
+                .controlSize(.regular)
 
                 if model.isRunning {
                     Button(role: .cancel) {
@@ -295,12 +326,12 @@ struct ContentView: View {
                     } label: {
                         Label("取消", systemImage: "xmark")
                     }
+                    .controlSize(.small)
                 }
             }
-            Toggle("开启 PDF 公式 OCR", isOn: $settings.enableFormulaOCR)
-                .disabled(model.isRunning)
         }
-        .frame(maxWidth: .infinity, minHeight: 155)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 116)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(isTargeted ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
@@ -328,9 +359,10 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(statusText)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Text(timeText)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -341,13 +373,18 @@ struct ContentView: View {
                     .foregroundStyle(.red)
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
     }
 
     private var outputPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("输出")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Button {
                     openOutputFolder()
@@ -356,6 +393,7 @@ struct ContentView: View {
                 }
             }
             Text(model.outputPath ?? settings.outputFolder)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .textSelection(.enabled)
@@ -375,6 +413,11 @@ struct ContentView: View {
                 )
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
     }
 
     private var statusText: String {
@@ -433,20 +476,27 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("设置")
-                .font(.system(size: 20, weight: .semibold))
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("设置")
+                    .font(.system(size: 19, weight: .semibold))
+                Spacer()
+                Button("完成") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
 
             settingRow(
                 title: "模型文件夹",
-                subtitle: "对应 MARKITDOWNPRO_CACHE_DIR。留空时使用命令自身默认缓存。模型不会打包进应用。",
+                subtitle: "对应 MARKITDOWNPRO_CACHE_DIR，默认使用项目内 .cache。模型不会打包进应用。",
                 value: $settings.modelFolder,
                 chooseDirectory: true
             )
 
             settingRow(
                 title: "输出文件夹",
-                subtitle: "默认是下载文件夹中的 maritdown-output。",
+                subtitle: "默认是下载文件夹中的 markitdown-output。",
                 value: $settings.outputFolder,
                 chooseDirectory: true
             )
@@ -457,17 +507,9 @@ struct SettingsView: View {
                 value: $settings.commandPath,
                 chooseDirectory: false
             )
-
-            HStack {
-                Spacer()
-                Button("完成") {
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-            }
         }
         .padding(22)
-        .frame(width: 640)
+        .frame(width: 560)
     }
 
     private func settingRow(
@@ -490,6 +532,11 @@ struct SettingsView: View {
                 }
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
     }
 
     private func choose(value: Binding<String>, directory: Bool) {
