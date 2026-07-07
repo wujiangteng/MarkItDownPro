@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -10,7 +11,7 @@ struct MarkItDownProApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(settings)
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: 640, minHeight: 430)
         }
         .windowStyle(.titleBar)
     }
@@ -26,6 +27,9 @@ final class AppSettings: ObservableObject {
     @Published var commandPath: String {
         didSet { UserDefaults.standard.set(commandPath, forKey: "commandPath") }
     }
+    @Published var enableFormulaOCR: Bool {
+        didSet { UserDefaults.standard.set(enableFormulaOCR, forKey: "enableFormulaOCR") }
+    }
 
     init() {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
@@ -36,6 +40,7 @@ final class AppSettings: ObservableObject {
         outputFolder = UserDefaults.standard.string(forKey: "outputFolder") ?? defaultOutput
         modelFolder = UserDefaults.standard.string(forKey: "modelFolder") ?? ""
         commandPath = UserDefaults.standard.string(forKey: "commandPath") ?? defaultCommand
+        enableFormulaOCR = UserDefaults.standard.object(forKey: "enableFormulaOCR") as? Bool ?? true
     }
 }
 
@@ -77,7 +82,7 @@ final class ConversionModel: ObservableObject {
         state = .running
         progress = 0
         elapsedSeconds = 0
-        estimatedSeconds = estimateDuration(for: selectedFile)
+        estimatedSeconds = estimateDuration(for: selectedFile, settings: settings)
         outputText = ""
         outputPath = nil
         errorMessage = nil
@@ -97,11 +102,15 @@ final class ConversionModel: ObservableObject {
         let executable = URL(fileURLWithPath: settings.commandPath)
         let process = Process()
         process.executableURL = executable
-        process.arguments = [
+        var arguments = [
             selectedFile.path,
             "-o",
             outputFolder.path,
         ]
+        if !settings.enableFormulaOCR {
+            arguments.append("--no-pdf-formula-ocr")
+        }
+        process.arguments = arguments
 
         var environment = ProcessInfo.processInfo.environment
         if !settings.modelFolder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -204,12 +213,16 @@ final class ConversionModel: ObservableObject {
         progress = 0
     }
 
-    private func estimateDuration(for url: URL) -> TimeInterval {
+    private func estimateDuration(for url: URL, settings: AppSettings) -> TimeInterval {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let megabytes = max(Double(size) / 1_048_576.0, 0.1)
         switch url.pathExtension.lowercased() {
         case "pdf":
-            return max(20, min(600, 25 + megabytes * 8))
+            let pageCount = PDFDocument(url: url)?.pageCount
+            let pages = Double(max(pageCount ?? 0, 1))
+            let perPage = settings.enableFormulaOCR ? 10.0 : 2.5
+            let modelWarmup = settings.enableFormulaOCR ? 25.0 : 4.0
+            return max(8, min(1800, modelWarmup + pages * perPage + megabytes * 1.5))
         case "docx":
             return max(6, min(180, 5 + megabytes * 1.5))
         default:
@@ -223,17 +236,18 @@ struct ContentView: View {
     @StateObject private var model = ConversionModel()
     @State private var isTargeted = false
     @State private var showingSettings = false
+    @State private var showingLog = false
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            VStack(spacing: 18) {
+            VStack(spacing: 14) {
                 dropZone
                 statusPanel
                 outputPanel
             }
-            .padding(22)
+            .padding(18)
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -257,9 +271,9 @@ struct ContentView: View {
     }
 
     private var dropZone: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             Image(systemName: model.isRunning ? "arrow.triangle.2.circlepath" : "doc.badge.plus")
-                .font(.system(size: 44, weight: .light))
+                .font(.system(size: 34, weight: .light))
                 .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
             Text(model.selectedFile?.lastPathComponent ?? "拖拽 PDF 或 DOCX 到这里")
                 .font(.system(size: 18, weight: .medium))
@@ -283,8 +297,10 @@ struct ContentView: View {
                     }
                 }
             }
+            Toggle("开启 PDF 公式 OCR", isOn: $settings.enableFormulaOCR)
+                .disabled(model.isRunning)
         }
-        .frame(maxWidth: .infinity, minHeight: 210)
+        .frame(maxWidth: .infinity, minHeight: 155)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(isTargeted ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
@@ -343,19 +359,21 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .textSelection(.enabled)
-            ScrollView {
-                Text(model.outputText.isEmpty ? "转换日志会显示在这里。" : model.outputText)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+            DisclosureGroup("命令行输出", isExpanded: $showingLog) {
+                ScrollView {
+                    Text(model.outputText.isEmpty ? "转换日志会显示在这里。" : model.outputText)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(minHeight: 95)
+                .padding(10)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.2))
+                )
             }
-            .frame(minHeight: 120)
-            .padding(10)
-            .background(Color(nsColor: .textBackgroundColor))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.2))
-            )
         }
     }
 
@@ -428,7 +446,7 @@ struct SettingsView: View {
 
             settingRow(
                 title: "输出文件夹",
-                subtitle: "默认是下载文件夹中的 markitdown-output。",
+                subtitle: "默认是下载文件夹中的 maritdown-output。",
                 value: $settings.outputFolder,
                 chooseDirectory: true
             )
@@ -479,6 +497,8 @@ struct SettingsView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = directory
         panel.canChooseFiles = !directory
+        panel.canCreateDirectories = directory
+        panel.showsHiddenFiles = true
         if panel.runModal() == .OK, let url = panel.url {
             value.wrappedValue = url.path
         }

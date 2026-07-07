@@ -123,7 +123,9 @@ The app supports:
 - Clicking to choose a file; conversion starts immediately after selection.
 - Choosing a model/cache folder in Settings. The app passes it to the CLI through `MARKITDOWNPRO_CACHE_DIR`, so models do not need to be bundled inside the app.
 - Choosing an output folder in Settings. By default the app writes to `~/Downloads/maritdown-output`.
-- Showing an estimated conversion time and a progress bar while the CLI is running. The estimate is file-size based, so it is approximate.
+- Toggling PDF formula OCR before conversion.
+- Showing an estimated conversion time and a progress bar while the CLI is running. PDF estimates use page count; DOCX estimates use file size, so the estimate is still approximate.
+- Folding or expanding the command-line log output.
 
 Build the app bundle:
 
