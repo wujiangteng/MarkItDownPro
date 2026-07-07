@@ -8,8 +8,43 @@ PRODUCT_NAME="MarkItDownProApp"
 BUILD_DIR="$ROOT_DIR/.build/release"
 APP_DIR="$ROOT_DIR/.build/$APP_NAME.app"
 ICON_FILE="$ROOT_DIR/Resources/AppIcon.icns"
+APP_VENV_DIR="$ROOT_DIR/.build/app-venv"
 RUNTIME_DIR="$APP_DIR/Contents/Resources/runtime"
 PYTHON_DIR="$APP_DIR/Contents/Resources/python"
+
+prune_python_tree() {
+    local target="$1"
+
+    find "$target" -type d -name '__pycache__' -prune -exec rm -rf {} +
+    find "$target" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+    find "$target" -type d \( \
+        -iname 'test' -o \
+        -iname 'tests' -o \
+        -iname 'testing' -o \
+        -iname 'doc' -o \
+        -iname 'docs' -o \
+        -iname 'example' -o \
+        -iname 'examples' \
+    \) -prune -exec rm -rf {} +
+}
+
+prune_venv_bin() {
+    local bin_dir="$1/bin"
+    local name
+
+    [[ -d "$bin_dir" ]] || return 0
+    for path in "$bin_dir"/*; do
+        [[ -e "$path" ]] || continue
+        name="$(basename "$path")"
+        case "$name" in
+            python|python3|python3.12|markitdownpro|pdf2zh|texteller|rapidocr_onnxruntime|pymupdf)
+                ;;
+            *)
+                rm -f "$path"
+                ;;
+        esac
+    done
+}
 
 cd "$ROOT_DIR"
 swift build -c release
@@ -29,11 +64,16 @@ if [[ -z "$PYTHON_LINK" ]]; then
 fi
 PYTHON_ROOT="$(cd "$(dirname "$PYTHON_LINK")/.." && pwd)"
 
-mkdir -p "$RUNTIME_DIR" "$PYTHON_DIR"
+rm -rf "$APP_VENV_DIR"
 rsync -a --delete \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
-    "$PROJECT_ROOT/.venv/" "$RUNTIME_DIR/.venv/"
+    "$PROJECT_ROOT/.venv/" "$APP_VENV_DIR/"
+prune_python_tree "$APP_VENV_DIR"
+prune_venv_bin "$APP_VENV_DIR"
+
+mkdir -p "$RUNTIME_DIR" "$PYTHON_DIR"
+rsync -a --delete "$APP_VENV_DIR/" "$RUNTIME_DIR/.venv/"
 rsync -a --delete "$PYTHON_ROOT/" "$PYTHON_DIR/"
 rsync -a --delete "$PROJECT_ROOT/src/" "$RUNTIME_DIR/src/"
 rsync -a --delete \
