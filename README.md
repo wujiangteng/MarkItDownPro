@@ -150,13 +150,8 @@ packaged app it defaults to the bundled `markitdownpro-cli` launcher; during
 local development it falls back to this repository's `.venv/bin/markitdownpro`.
 
 The app bundle is built as a lightweight package: it includes the Python 3.12
-runtime, an app-specific pruned virtual environment, and MarkItDownPro
-source/vendor code inside the bundle. Model files are not bundled; choose the
-model/cache folder in Settings.
-
-During packaging, `build-app.sh` creates `.build/app-venv` from the development
-`.venv`, removes bytecode caches, test/example/documentation folders, and keeps
-only the small set of command-line entry points needed by the app.
+runtime, the project `.venv`, and MarkItDownPro source/vendor code inside the
+bundle. Model files are not bundled; choose the model/cache folder in Settings.
 
 ## Model Cache
 
