@@ -6,7 +6,7 @@ import statistics
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
 
@@ -34,11 +34,13 @@ class EnhancedPdfConverter(DocumentConverter):
         formula_ocr: bool = False,
         assets_dir: Path | None = None,
         assets_base_dir: Path | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.mode = mode
         self.formula_ocr = formula_ocr
         self.assets_dir = assets_dir
         self.assets_base_dir = assets_base_dir
+        self.progress_callback = progress_callback
         self._layout_model = None
         self._formula_model = None
         self._formula_tokenizer = None
@@ -165,7 +167,14 @@ class EnhancedPdfConverter(DocumentConverter):
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         chunks: list[str] = []
+        total_pages = len(doc)
         for page_index, page in enumerate(doc):
+            self._emit_progress(
+                stage="pages",
+                current=page_index + 1,
+                total=total_pages,
+                message=f"正在处理第 {page_index + 1} / {total_pages} 页",
+            )
             text = self._extract_ordered_text(page).strip()
             if text:
                 chunks.append(f"<!-- page {page_index + 1} -->\n\n{text}")
@@ -177,12 +186,19 @@ class EnhancedPdfConverter(DocumentConverter):
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         chunks: list[str] = []
+        total_pages = len(doc)
 
         if self.assets_dir is not None:
             self.assets_dir.mkdir(parents=True, exist_ok=True)
 
         for page_index, page in enumerate(doc):
             page_number = page_index + 1
+            self._emit_progress(
+                stage="pages",
+                current=page_number,
+                total=total_pages,
+                message=f"正在处理第 {page_number} / {total_pages} 页",
+            )
             chunks.append(f"<!-- page {page_number} -->")
 
             try:
@@ -219,6 +235,10 @@ class EnhancedPdfConverter(DocumentConverter):
 
         doc.close()
         return "\n\n".join(chunk for chunk in chunks if chunk.strip())
+
+    def _emit_progress(self, **event: Any) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(event)
 
     def _extract_ordered_text(self, page: Any) -> str:
         blocks = self._text_blocks(page)

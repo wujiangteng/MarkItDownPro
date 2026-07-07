@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 from zipfile import ZipFile
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 from xml.etree import ElementTree as ET
 
 import mammoth
@@ -42,11 +42,14 @@ class EnhancedDocxConverter(DocumentConverter):
         *,
         assets_dir: Path | None = None,
         assets_base_dir: Path | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.assets_dir = assets_dir
         self.assets_base_dir = assets_base_dir
+        self.progress_callback = progress_callback
         self._html_converter = HtmlConverter()
         self._image_index = 0
+        self._image_total = 0
 
     def accepts(
         self,
@@ -66,13 +69,19 @@ class EnhancedDocxConverter(DocumentConverter):
     ) -> DocumentConverterResult:
         self._image_index = 0
         docx_bytes = file_stream.read()
+        self._image_total = self._count_images(docx_bytes)
+        self._emit_progress(stage="docx", current=1, total=4, message="正在读取 DOCX")
         style_map = self._style_map(docx_bytes, kwargs.get("style_map", None))
+        self._emit_progress(stage="docx", current=2, total=4, message="正在恢复标题层级")
         pre_processed = pre_process_docx(io.BytesIO(docx_bytes))
+        image_message = "正在提取图片" if self._image_total else "未检测到图片，正在转换正文"
+        self._emit_progress(stage="docx", current=3, total=4, message=image_message)
         result = mammoth.convert_to_html(
             pre_processed,
             style_map=style_map,
             convert_image=mammoth.images.img_element(self._image_attributes),
         )
+        self._emit_progress(stage="markdown", current=1, total=1, message="正在生成 Markdown")
         return self._html_converter.convert_string(result.value, **kwargs)
 
     def _style_map(self, docx_bytes: bytes, user_style_map: str | None) -> str | None:
@@ -137,6 +146,12 @@ class EnhancedDocxConverter(DocumentConverter):
 
         self.assets_dir.mkdir(parents=True, exist_ok=True)
         self._image_index += 1
+        self._emit_progress(
+            stage="images",
+            current=self._image_index,
+            total=max(self._image_total, self._image_index),
+            message=f"正在提取第 {self._image_index} / {max(self._image_total, self._image_index)} 张图片",
+        )
         path = self._save_image_asset(image)
         return {"src": self._asset_markdown_path(path)}
 
@@ -195,3 +210,18 @@ class EnhancedDocxConverter(DocumentConverter):
             return Path(os.path.relpath(path, self.assets_base_dir)).as_posix()
         except ValueError:
             return path.as_posix()
+
+    def _count_images(self, docx_bytes: bytes) -> int:
+        try:
+            with ZipFile(io.BytesIO(docx_bytes)) as archive:
+                return sum(
+                    1
+                    for name in archive.namelist()
+                    if name.startswith("word/media/") and not name.endswith("/")
+                )
+        except Exception:
+            return 0
+
+    def _emit_progress(self, **event: Any) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(event)

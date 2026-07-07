@@ -1,5 +1,4 @@
 import AppKit
-import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -48,6 +47,13 @@ final class AppSettings: ObservableObject {
     }
 }
 
+struct ProgressEvent: Decodable {
+    let stage: String
+    let current: Int?
+    let total: Int?
+    let message: String?
+}
+
 @MainActor
 final class ConversionModel: ObservableObject {
     enum State: Equatable {
@@ -60,8 +66,8 @@ final class ConversionModel: ObservableObject {
     @Published var selectedFile: URL?
     @Published var state: State = .idle
     @Published var progress: Double = 0
-    @Published var estimatedSeconds: TimeInterval = 0
     @Published var elapsedSeconds: TimeInterval = 0
+    @Published var progressMessage = "等待文件"
     @Published var outputText = ""
     @Published var outputPath: String?
     @Published var errorMessage: String?
@@ -86,7 +92,7 @@ final class ConversionModel: ObservableObject {
         state = .running
         progress = 0
         elapsedSeconds = 0
-        estimatedSeconds = estimateDuration(for: selectedFile, settings: settings)
+        progressMessage = "正在准备转换"
         outputText = ""
         outputPath = nil
         errorMessage = nil
@@ -110,6 +116,7 @@ final class ConversionModel: ObservableObject {
             selectedFile.path,
             "-o",
             outputFolder.path,
+            "--progress",
         ]
         if !settings.enableFormulaOCR {
             arguments.append("--no-pdf-formula-ocr")
@@ -166,13 +173,60 @@ final class ConversionModel: ObservableObject {
     }
 
     private func appendOutput(_ text: String) {
-        outputText += text
-        let lines = outputText
-            .split(whereSeparator: \.isNewline)
-            .map(String.init)
-        if let path = lines.last(where: { $0.hasSuffix(".md") }) {
+        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+        var visibleLines: [String] = []
+        for line in lines {
+            if line.hasPrefix("MARKITDOWNPRO_PROGRESS ") {
+                handleProgressLine(line)
+            } else {
+                visibleLines.append(line)
+            }
+        }
+
+        if !visibleLines.isEmpty {
+            outputText += visibleLines.joined(separator: "\n") + "\n"
+        }
+
+        let allLines = outputText.split(whereSeparator: \.isNewline).map(String.init)
+        if let path = allLines.last(where: { $0.hasSuffix(".md") }) {
             outputPath = path
         }
+    }
+
+    private func handleProgressLine(_ line: String) {
+        let prefix = "MARKITDOWNPRO_PROGRESS "
+        guard line.hasPrefix(prefix) else { return }
+        let jsonText = String(line.dropFirst(prefix.count))
+        guard let data = jsonText.data(using: .utf8),
+              let event = try? JSONDecoder().decode(ProgressEvent.self, from: data)
+        else { return }
+
+        progressMessage = event.message ?? progressMessage
+        switch event.stage {
+        case "prepare":
+            progress = max(progress, 0.03)
+        case "pages":
+            progress = max(progress, 0.05 + fraction(event) * 0.75)
+        case "docx":
+            progress = max(progress, 0.05 + fraction(event) * 0.35)
+        case "images":
+            progress = max(progress, 0.40 + fraction(event) * 0.35)
+        case "markdown":
+            progress = max(progress, 0.88)
+        case "write":
+            progress = max(progress, 0.95)
+        case "done":
+            progress = 1
+        default:
+            break
+        }
+    }
+
+    private func fraction(_ event: ProgressEvent) -> Double {
+        guard let current = event.current, let total = event.total, total > 0 else {
+            return 0
+        }
+        return min(max(Double(current) / Double(total), 0), 1)
     }
 
     private func startTimer() {
@@ -181,9 +235,6 @@ final class ConversionModel: ObservableObject {
             Task { @MainActor in
                 guard let self, self.state == .running, let startedAt = self.startedAt else { return }
                 self.elapsedSeconds = Date().timeIntervalSince(startedAt)
-                if self.estimatedSeconds > 0 {
-                    self.progress = min(0.95, self.elapsedSeconds / self.estimatedSeconds)
-                }
             }
         }
     }
@@ -197,6 +248,7 @@ final class ConversionModel: ObservableObject {
         if exitCode == 0 {
             state = .succeeded
             progress = 1
+            progressMessage = "转换完成"
             if outputPath == nil {
                 outputPath = outputText
                     .split(whereSeparator: \.isNewline)
@@ -214,24 +266,8 @@ final class ConversionModel: ObservableObject {
         process = nil
         state = .failed
         errorMessage = message
+        progressMessage = message
         progress = 0
-    }
-
-    private func estimateDuration(for url: URL, settings: AppSettings) -> TimeInterval {
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let megabytes = max(Double(size) / 1_048_576.0, 0.1)
-        switch url.pathExtension.lowercased() {
-        case "pdf":
-            let pageCount = PDFDocument(url: url)?.pageCount
-            let pages = Double(max(pageCount ?? 0, 1))
-            let perPage = settings.enableFormulaOCR ? 10.0 : 2.5
-            let modelWarmup = settings.enableFormulaOCR ? 25.0 : 4.0
-            return max(8, min(1800, modelWarmup + pages * perPage + megabytes * 1.5))
-        case "docx":
-            return max(6, min(180, 5 + megabytes * 1.5))
-        default:
-            return max(5, min(120, 4 + megabytes))
-        }
     }
 }
 
@@ -425,7 +461,7 @@ struct ContentView: View {
         case .idle:
             return "等待文件"
         case .running:
-            return "正在转换"
+            return model.progressMessage
         case .succeeded:
             return "转换完成"
         case .failed:
@@ -435,9 +471,9 @@ struct ContentView: View {
 
     private var timeText: String {
         if model.state == .running {
-            return "已用 \(format(model.elapsedSeconds)) / 预计 \(format(model.estimatedSeconds))"
+            return "已用 \(format(model.elapsedSeconds))"
         }
-        if model.estimatedSeconds > 0 {
+        if model.elapsedSeconds > 0 {
             return "耗时 \(format(model.elapsedSeconds))"
         }
         return ""

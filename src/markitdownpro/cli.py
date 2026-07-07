@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import shutil
 import sys
@@ -59,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--assets-dir",
         help="Directory for extracted PDF region images. Defaults next to output file.",
     )
+    convert.add_argument(
+        "--progress",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     return parser
 
@@ -96,15 +102,40 @@ def _convert(args: argparse.Namespace) -> int:
         formula_ocr=args.pdf_formula_ocr,
         assets_dir=assets_dir,
         assets_base_dir=output_dir,
+        progress_callback=_progress_emitter(args.progress),
     )
+    _emit_progress(args.progress, stage="prepare", current=0, total=1, message="正在准备转换")
     result = converter.convert(args.input)
+    _emit_progress(args.progress, stage="markdown", current=0, total=1, message="正在生成 Markdown")
     markdown = _sanitize_markdown(result.markdown)
 
+    _emit_progress(args.progress, stage="write", current=0, total=1, message="正在写入输出文件")
     _copy_source_file(args.input, output_dir, output_stem)
     output.write_text(markdown, encoding="utf-8")
+    _emit_progress(args.progress, stage="done", current=1, total=1, message="转换完成")
     print(output)
 
     return 0
+
+
+def _progress_emitter(enabled: bool):
+    if not enabled:
+        return None
+
+    def emit(event: dict[str, object]) -> None:
+        _emit_progress(enabled, **event)
+
+    return emit
+
+
+def _emit_progress(enabled: bool, **event: object) -> None:
+    if not enabled:
+        return
+    print(
+        "MARKITDOWNPRO_PROGRESS " + json.dumps(event, ensure_ascii=False),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _sanitize_markdown(markdown: str) -> str:

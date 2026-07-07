@@ -124,7 +124,7 @@ The app supports:
 - Choosing a model/cache folder in Settings. The app passes it to the CLI through `MARKITDOWNPRO_CACHE_DIR`, so models do not need to be bundled inside the app.
 - Choosing an output folder in Settings. By default the app writes to `~/Downloads/markitdown-output`.
 - Toggling PDF formula OCR before conversion.
-- Showing an estimated conversion time and a progress bar while the CLI is running. PDF estimates use page count; DOCX estimates use file size, so the estimate is still approximate.
+- Showing stage-based progress while the CLI is running. PDF progress follows the current processed page over total pages, then finishes with Markdown generation and file writing stages; DOCX progress follows reading, heading restoration, image extraction, Markdown generation, and file writing stages.
 - Folding or expanding the command-line log output.
 
 Build the app bundle:
