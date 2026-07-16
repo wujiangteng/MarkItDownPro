@@ -324,15 +324,26 @@ class EnhancedPdfConverter(DocumentConverter):
         sizes: list[float] = []
         fonts: list[str] = []
         flags: list[int] = []
+        spans: list[dict[str, Any]] = []
         for line in block.get("lines", []):
             line_parts: list[str] = []
             for span in line.get("spans", []):
                 value = span.get("text", "")
                 line_parts.append(value)
                 if value.strip():
+                    span_font = span.get("font", "")
+                    span_flags = int(span.get("flags", 0))
                     sizes.append(float(span.get("size", 0.0)))
-                    fonts.append(span.get("font", ""))
-                    flags.append(int(span.get("flags", 0)))
+                    fonts.append(span_font)
+                    flags.append(span_flags)
+                    spans.append(
+                        {
+                            "text": value,
+                            "font": span_font,
+                            "size": float(span.get("size", 0.0)),
+                            "flags": span_flags,
+                        }
+                    )
             parts.append("".join(line_parts))
 
         text = " ".join(" ".join(parts).split())
@@ -346,6 +357,7 @@ class EnhancedPdfConverter(DocumentConverter):
             or any(flag & 16 for flag in flags),
             "is_italic": bool(re.search(r"italic|ital|oblique", font, re.I))
             or any(flag & 2 for flag in flags),
+            "spans": spans,
         }
 
     def _format_heading(
@@ -361,6 +373,14 @@ class EnhancedPdfConverter(DocumentConverter):
             return "## Abstract"
         if normalized == "a r t i c l e i n f o":
             return "## Article info"
+        span_prefix = self._split_leading_heading_span(normalized, block)
+        if span_prefix:
+            heading, rest, level = span_prefix
+            return f"{'#' * level} {heading}\n\n{rest}"
+        numbered_prefix = self._split_numbered_academic_heading_prefix(normalized)
+        if numbered_prefix:
+            heading, rest, level = numbered_prefix
+            return f"{'#' * level} {heading}\n\n{rest}"
         level = self._heading_level(normalized, block, body_size, page_width)
         if level is not None:
             combined = self._format_combined_numbered_headings(normalized)
@@ -380,6 +400,86 @@ class EnhancedPdfConverter(DocumentConverter):
         if match:
             return match.group(1).strip(), match.group(2).strip()
         return text, None
+
+    def _split_leading_heading_span(
+        self,
+        text: str,
+        block: dict[str, Any],
+    ) -> tuple[str, str, int] | None:
+        spans = block.get("spans") or []
+        if len(spans) < 2:
+            return None
+
+        heading = " ".join(str(spans[0].get("text", "")).split()).strip()
+        if not heading:
+            return None
+        heading = heading.rstrip()
+        rest = self._text_after_prefix(text, heading)
+        if not rest:
+            return None
+
+        if heading.rstrip(".").lower() == "abstract":
+            return "Abstract", rest, 2
+
+        match = re.match(r"^(\d{1,2}(?:\.\d{1,2})*)\.?\s+(.{2,80})$", heading)
+        if not match:
+            return None
+        if self._looks_like_toc_or_table_line(
+            heading,
+            block={
+                **block,
+                "width": min(float(block.get("width", 0.0)), len(heading) * 8.0),
+            },
+            page_width=max(float(block.get("x1", 0.0)), 1.0),
+        ):
+            return None
+
+        number = match.group(1)
+        title = match.group(2).strip()
+        if not re.search(r"[A-Za-z\u4e00-\u9fff]", title):
+            return None
+        level = min(2 + number.count("."), 6)
+        return f"{number}. {title}", rest, level
+
+    def _text_after_prefix(self, text: str, prefix: str) -> str | None:
+        normalized_prefix = " ".join(prefix.split()).strip()
+        if not text.startswith(normalized_prefix):
+            return None
+        return text[len(normalized_prefix) :].strip() or None
+
+    def _split_numbered_academic_heading_prefix(
+        self, text: str
+    ) -> tuple[str, str, int] | None:
+        match = re.match(
+            r"^(\d{1,2}(?:\.\d{1,2})*\.?)\s+(.+)$",
+            text,
+        )
+        if not match:
+            return None
+
+        number = match.group(1).rstrip(".")
+        remainder = match.group(2).strip()
+        for title in sorted(self._academic_heading_titles(), key=len, reverse=True):
+            if not remainder.lower().startswith(title):
+                continue
+            suffix = remainder[len(title) :]
+            if suffix and suffix[0].isalpha():
+                continue
+            rest = suffix.strip()
+            if not rest or not self._looks_like_heading_body_continuation(rest):
+                continue
+            heading = f"{number}. {remainder[: len(title)].strip()}"
+            level = min(2 + number.count("."), 6)
+            return heading, rest, level
+        return None
+
+    def _looks_like_heading_body_continuation(self, text: str) -> bool:
+        return bool(
+            re.match(
+                r"^(The|This|These|We|In|For|To|A|An|As|Based|Here|Our|Several|When|Where|With)\b",
+                text,
+            )
+        ) or bool(re.match(r"^[a-z]", text))
 
     def _format_combined_numbered_headings(self, text: str) -> str | None:
         matches = list(
@@ -418,10 +518,11 @@ class EnhancedPdfConverter(DocumentConverter):
         if font_size < body_size - 0.2 and not is_prominent:
             return None
 
-        is_short_left_line = (
-            block["x0"] <= page_width * 0.22
-            and length <= 36
-            and font_size >= body_size - 0.2
+        is_short_column_line = self._is_short_column_line(
+            block,
+            length=length,
+            body_size=body_size,
+            page_width=page_width,
         )
 
         if re.match(r"^第[一二三四五六七八九十百\d]+[章节篇部分]\S*", text):
@@ -433,20 +534,76 @@ class EnhancedPdfConverter(DocumentConverter):
         if re.match(r"^\d{1,2}\s+[\u4e00-\u9fffA-Za-z]", text):
             if self._looks_like_table_entry(text):
                 return None
-            return 2 if is_prominent or is_short_left_line else None
+            return 2 if is_prominent or is_short_column_line else None
 
         match = re.match(r"^(\d{1,2}(?:\.\d{1,2})+)\.?\s+\S+", text)
-        if match and (is_prominent or is_short_left_line):
+        if match and (is_prominent or is_short_column_line):
             depth = match.group(1).count(".")
             return min(2 + depth, 6)
 
         if re.match(r"^\d+(?:\.\d+)*\.?\s+[A-Z][A-Za-z].*", text):
-            return 2 if is_prominent or is_short_left_line else None
+            return 2 if is_prominent or is_short_column_line else None
+
+        if self._looks_like_academic_heading(text):
+            return 2 if is_prominent or is_short_column_line or styled else None
 
         if block["is_bold"] and font_size >= body_size + 2.0 and length <= 40:
             return 2
 
         return None
+
+    def _is_short_column_line(
+        self,
+        block: dict[str, Any],
+        *,
+        length: int,
+        body_size: float,
+        page_width: float,
+    ) -> bool:
+        starts_left_column = block["x0"] <= page_width * 0.22
+        starts_right_column = page_width * 0.42 <= block["x0"] <= page_width * 0.64
+        return (
+            (starts_left_column or starts_right_column)
+            and length <= 48
+            and block["width"] <= page_width * 0.42
+            and block["font_size"] >= body_size - 0.2
+        )
+
+    def _looks_like_academic_heading(self, text: str) -> bool:
+        normalized = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", text).strip().lower()
+        normalized = normalized.rstrip(".:")
+        return normalized in self._academic_heading_titles()
+
+    def _academic_heading_titles(self) -> set[str]:
+        return {
+            "abstract",
+            "introduction",
+            "background",
+            "case study",
+            "data",
+            "data and methods",
+            "method",
+            "methods",
+            "methodology",
+            "materials and methods",
+            "model setup",
+            "model",
+            "models",
+            "model description",
+            "modelling",
+            "modeling",
+            "numerical model",
+            "observations",
+            "results",
+            "discussion",
+            "results and discussion",
+            "conclusion",
+            "conclusions",
+            "references",
+            "acknowledgements",
+            "acknowledgments",
+            "appendix",
+        }
 
     def _looks_like_toc_or_table_line(
         self,
@@ -459,6 +616,8 @@ class EnhancedPdfConverter(DocumentConverter):
         if re.match(r"^[a-z]{3,20}$", text):
             return True
         if re.match(r"^(Figure|Fig\.|Table)\s+\d+", text, re.I):
+            return True
+        if re.match(r"^PAPER\s+•\s+OPEN\s+ACCESS$", text, re.I):
             return True
         if re.match(r"^(Citation|Received|Revised|Accepted|Published|Copyright)\b", text):
             return True

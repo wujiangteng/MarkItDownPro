@@ -9,13 +9,19 @@ import sys
 from pathlib import Path
 
 from .cache import configure_project_cache
+from .translator import (
+    DEFAULT_LANG_IN,
+    DEFAULT_LANG_OUT,
+    SUPPORTED_TRANSLATION_SERVICES,
+    TextTranslator,
+)
 
 
 configure_project_cache()
 
 from .app import MarkItDownPro
 
-COMMANDS = {"convert"}
+COMMANDS = {"convert", "translate"}
 DEFAULT_OUTPUT_DIR = Path("output")
 MAX_OUTPUT_STEM_CHARS = 72
 MAX_OUTPUT_STEM_BYTES = 120
@@ -61,6 +67,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for extracted PDF region images. Defaults next to output file.",
     )
     convert.add_argument(
+        "--translate",
+        action="store_true",
+        help="Translate converted Markdown from English to Chinese before writing.",
+    )
+    convert.add_argument(
+        "--translation-service",
+        choices=SUPPORTED_TRANSLATION_SERVICES,
+        default="google",
+        help="Translation service used with --translate. Defaults to google.",
+    )
+    convert.add_argument(
+        "--progress",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
+    translate = subparsers.add_parser("translate", help="Translate a Markdown or text file.")
+    translate.add_argument("input", help="Input Markdown or text file path.")
+    translate.add_argument(
+        "-o",
+        "--output",
+        help=(
+            "Output translated Markdown file or output directory. Defaults to "
+            "output/<short_input_stem>_zh/<short_input_stem>_zh.md."
+        ),
+    )
+    translate.add_argument(
+        "--service",
+        choices=SUPPORTED_TRANSLATION_SERVICES,
+        default="google",
+        help="Translation service. Defaults to google.",
+    )
+    translate.add_argument(
+        "--lang-in",
+        default=DEFAULT_LANG_IN,
+        help="Source language code. Defaults to en.",
+    )
+    translate.add_argument(
+        "--lang-out",
+        default=DEFAULT_LANG_OUT,
+        help="Target language code. Defaults to zh.",
+    )
+    translate.add_argument(
         "--progress",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -80,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "convert":
         return _convert(args)
+    if args.command == "translate":
+        return _translate(args)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -108,11 +159,50 @@ def _convert(args: argparse.Namespace) -> int:
     result = converter.convert(args.input)
     _emit_progress(args.progress, stage="markdown", current=0, total=1, message="正在生成 Markdown")
     markdown = _sanitize_markdown(result.markdown)
+    if args.translate:
+        translator = TextTranslator(
+            service=args.translation_service,
+            lang_in=DEFAULT_LANG_IN,
+            lang_out=DEFAULT_LANG_OUT,
+        )
+        markdown = translator.translate_markdown(
+            markdown,
+            progress_callback=_progress_emitter(args.progress),
+        ).text
 
     _emit_progress(args.progress, stage="write", current=0, total=1, message="正在写入输出文件")
     _copy_source_file(args.input, output_dir, output_stem)
     output.write_text(markdown, encoding="utf-8")
     _emit_progress(args.progress, stage="done", current=1, total=1, message="转换完成")
+    print(output)
+
+    return 0
+
+
+def _translate(args: argparse.Namespace) -> int:
+    output, output_dir, output_stem = _resolve_output_layout(
+        args.input,
+        args.output,
+        stem_suffix=f"_{args.lang_out}",
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    input_path = Path(args.input)
+    _emit_progress(args.progress, stage="prepare", current=0, total=1, message="正在准备翻译")
+    markdown = input_path.read_text(encoding="utf-8")
+    translator = TextTranslator(
+        service=args.service,
+        lang_in=args.lang_in,
+        lang_out=args.lang_out,
+    )
+    result = translator.translate_markdown(
+        markdown,
+        progress_callback=_progress_emitter(args.progress),
+    )
+
+    _emit_progress(args.progress, stage="write", current=0, total=1, message="正在写入输出文件")
+    output.write_text(_sanitize_markdown(result.text), encoding="utf-8")
+    _emit_progress(args.progress, stage="done", current=1, total=1, message="翻译完成")
     print(output)
 
     return 0
@@ -145,8 +235,13 @@ def _sanitize_markdown(markdown: str) -> str:
     )
 
 
-def _resolve_output_layout(source: str, value: str | None) -> tuple[Path, Path, str]:
-    output_stem = _simplify_stem(Path(source).stem or "output")
+def _resolve_output_layout(
+    source: str,
+    value: str | None,
+    *,
+    stem_suffix: str = "",
+) -> tuple[Path, Path, str]:
+    output_stem = _simplify_stem((Path(source).stem or "output") + stem_suffix)
 
     if value:
         path = Path(value)

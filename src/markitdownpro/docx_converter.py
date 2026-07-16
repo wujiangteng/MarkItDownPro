@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import io
+import re
 from zipfile import ZipFile
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 from xml.etree import ElementTree as ET
 
 import mammoth
+from bs4 import BeautifulSoup, Tag
 from PIL import Image, ImageDraw
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
-from markitdown.converter_utils.docx.pre_process import pre_process_docx
+from markitdown.converter_utils.docx.pre_process import _convert_omath_to_latex
 from markitdown.converters._html_converter import HtmlConverter
 
 
@@ -73,7 +75,7 @@ class EnhancedDocxConverter(DocumentConverter):
         self._emit_progress(stage="docx", current=1, total=4, message="正在读取 DOCX")
         style_map = self._style_map(docx_bytes, kwargs.get("style_map", None))
         self._emit_progress(stage="docx", current=2, total=4, message="正在恢复标题层级")
-        pre_processed = pre_process_docx(io.BytesIO(docx_bytes))
+        pre_processed = self._pre_process_docx(docx_bytes)
         image_message = "正在提取图片" if self._image_total else "未检测到图片，正在转换正文"
         self._emit_progress(stage="docx", current=3, total=4, message=image_message)
         result = mammoth.convert_to_html(
@@ -82,7 +84,145 @@ class EnhancedDocxConverter(DocumentConverter):
             convert_image=mammoth.images.img_element(self._image_attributes),
         )
         self._emit_progress(stage="markdown", current=1, total=1, message="正在生成 Markdown")
-        return self._html_converter.convert_string(result.value, **kwargs)
+        return self._convert_html_to_markdown(result.value, **kwargs)
+
+    def _pre_process_docx(self, docx_bytes: bytes) -> BinaryIO:
+        output_docx = io.BytesIO()
+        with ZipFile(io.BytesIO(docx_bytes), mode="r") as zip_input:
+            with ZipFile(output_docx, mode="w") as zip_output:
+                zip_output.comment = zip_input.comment
+                for item in zip_input.infolist():
+                    content = zip_input.read(item.filename)
+                    if (
+                        item.filename.startswith("word/")
+                        and item.filename.endswith(".xml")
+                        and b"oMath" in content
+                    ):
+                        try:
+                            content = self._pre_process_math(content)
+                        except Exception:
+                            pass
+                    zip_output.writestr(item, content)
+        output_docx.seek(0)
+        return output_docx
+
+    def _pre_process_math(self, content: bytes) -> bytes:
+        soup = BeautifulSoup(content.decode(), features="xml")
+        for tag in list(soup.find_all("oMathPara")):
+            self._replace_omath_para(soup, tag)
+        for tag in list(soup.find_all("oMath")):
+            self._replace_omath(soup, tag, block=False)
+        return str(soup).encode()
+
+    def _replace_omath_para(self, soup: BeautifulSoup, tag: Tag) -> None:
+        paragraph = soup.new_tag("w:p")
+        for child in tag.find_all("oMath"):
+            paragraph.append(self._omath_replacement(soup, child, block=True))
+        tag.replace_with(paragraph)
+
+    def _replace_omath(self, soup: BeautifulSoup, tag: Tag, *, block: bool) -> None:
+        tag.replace_with(self._omath_replacement(soup, tag, block=block))
+
+    def _omath_replacement(self, soup: BeautifulSoup, tag: Tag, *, block: bool) -> Tag:
+        latex = self._omath_latex(tag)
+        text = f"$${latex}$$" if block else f"${latex}$"
+        text_tag = soup.new_tag("w:t")
+        text_tag.string = text
+        run_tag = soup.new_tag("w:r")
+        run_tag.append(text_tag)
+        return run_tag
+
+    def _omath_latex(self, tag: Tag) -> str:
+        try:
+            latex = _convert_omath_to_latex(tag)
+        except Exception:
+            latex = self._omath_plain_text(tag)
+        latex = self._sanitize_latex(latex)
+        return latex or self._sanitize_latex(self._omath_plain_text(tag))
+
+    def _omath_plain_text(self, tag: Tag) -> str:
+        return "".join(text.get_text() for text in tag.find_all("t"))
+
+    def _sanitize_latex(self, latex: str) -> str:
+        latex = latex.strip()
+        replacements = {
+            "\\m ": "\\mu ",
+            "\\n ": "\\nu ",
+            "\\ta ": "\\tau ",
+            "×": "\\times ",
+            "≤": "\\le ",
+            "≥": "\\ge ",
+            "≠": "\\ne ",
+            "±": "\\pm ",
+        }
+        for source, target in replacements.items():
+            latex = latex.replace(source, target)
+        return latex
+
+    def _convert_html_to_markdown(self, html: str, **kwargs: Any) -> DocumentConverterResult:
+        html, tables = self._extract_merged_tables(html)
+        result = self._html_converter.convert_string(html, **kwargs)
+        markdown = result.markdown
+        for placeholder, table_html in tables.items():
+            markdown = markdown.replace(placeholder, table_html)
+        markdown = self._restore_math_markdown(markdown)
+        return DocumentConverterResult(markdown=markdown, title=result.title)
+
+    def _extract_merged_tables(self, html: str) -> tuple[str, dict[str, str]]:
+        soup = BeautifulSoup(html, "html.parser")
+        tables: dict[str, str] = {}
+        for index, table in enumerate(soup.find_all("table"), start=1):
+            if not self._has_merged_cells(table):
+                continue
+            placeholder = f"MARKITDOWNPROMERGEDTABLE{index:04d}"
+            tables[placeholder] = table.decode(formatter="html")
+            marker = soup.new_tag("p")
+            marker.string = placeholder
+            table.replace_with(marker)
+        return str(soup), tables
+
+    def _has_merged_cells(self, table: Any) -> bool:
+        for cell in table.find_all(["td", "th"]):
+            if self._span_value(cell.get("rowspan")) > 1:
+                return True
+            if self._span_value(cell.get("colspan")) > 1:
+                return True
+        return False
+
+    def _span_value(self, value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 1
+
+    def _restore_math_markdown(self, markdown: str) -> str:
+        restored: list[str] = []
+        index = 0
+        while index < len(markdown):
+            if markdown.startswith("$$", index):
+                end = markdown.find("$$", index + 2)
+                if end == -1:
+                    restored.append(markdown[index:])
+                    break
+                content = self._unescape_markdown_math(markdown[index + 2 : end])
+                restored.append(f"$${content}$$")
+                index = end + 2
+                continue
+            if markdown[index] == "$":
+                end = markdown.find("$", index + 1)
+                if end == -1:
+                    restored.append(markdown[index:])
+                    break
+                content = self._unescape_markdown_math(markdown[index + 1 : end])
+                restored.append(f"${content}$")
+                index = end + 1
+                continue
+            restored.append(markdown[index])
+            index += 1
+        return "".join(restored)
+
+    def _unescape_markdown_math(self, text: str) -> str:
+        return re.sub(r"\\([*_{}\[\]()#+\-.!])", r"\1", text)
 
     def _style_map(self, docx_bytes: bytes, user_style_map: str | None) -> str | None:
         generated = self._heading_style_map(docx_bytes)

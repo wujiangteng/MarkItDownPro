@@ -37,6 +37,12 @@ final class AppSettings: ObservableObject {
     @Published var enableFormulaOCR: Bool {
         didSet { UserDefaults.standard.set(enableFormulaOCR, forKey: "enableFormulaOCR") }
     }
+    @Published var enableTranslation: Bool {
+        didSet { UserDefaults.standard.set(enableTranslation, forKey: "enableTranslation") }
+    }
+    @Published var translationService: String {
+        didSet { UserDefaults.standard.set(translationService, forKey: "translationService") }
+    }
 
     init() {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
@@ -51,6 +57,9 @@ final class AppSettings: ObservableObject {
         modelFolder = savedModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? savedModel! : defaultModel
         commandPath = UserDefaults.standard.string(forKey: "commandPath") ?? defaultCommand
         enableFormulaOCR = UserDefaults.standard.object(forKey: "enableFormulaOCR") as? Bool ?? true
+        enableTranslation = UserDefaults.standard.object(forKey: "enableTranslation") as? Bool ?? false
+        let savedTranslationService = UserDefaults.standard.string(forKey: "translationService") ?? "google"
+        translationService = ["google", "bing"].contains(savedTranslationService) ? savedTranslationService : "google"
     }
 }
 
@@ -128,6 +137,11 @@ final class ConversionModel: ObservableObject {
         if !settings.enableFormulaOCR {
             arguments.append("--no-pdf-formula-ocr")
         }
+        if settings.enableTranslation {
+            arguments.append("--translate")
+            arguments.append("--translation-service")
+            arguments.append(settings.translationService)
+        }
         process.arguments = arguments
 
         var environment = ProcessInfo.processInfo.environment
@@ -169,7 +183,7 @@ final class ConversionModel: ObservableObject {
             try process.run()
             startTimer()
         } catch {
-            fail("无法启动转换命令：\(error.localizedDescription)")
+            fail("无法启动命令：\(error.localizedDescription)")
         }
     }
 
@@ -218,6 +232,8 @@ final class ConversionModel: ObservableObject {
             progress = max(progress, 0.05 + fraction(event) * 0.35)
         case "images":
             progress = max(progress, 0.40 + fraction(event) * 0.35)
+        case "translation":
+            progress = max(progress, 0.05 + fraction(event) * 0.85)
         case "markdown":
             progress = max(progress, 0.88)
         case "write":
@@ -255,7 +271,7 @@ final class ConversionModel: ObservableObject {
         if exitCode == 0 {
             state = .succeeded
             progress = 1
-            progressMessage = "转换完成"
+            progressMessage = "处理完成"
             if outputPath == nil {
                 outputPath = outputText
                     .split(whereSeparator: \.isNewline)
@@ -263,7 +279,7 @@ final class ConversionModel: ObservableObject {
                     .last(where: { $0.hasSuffix(".md") })
             }
         } else {
-            fail("转换失败，退出码：\(exitCode)")
+            fail("处理失败，退出码：\(exitCode)")
         }
     }
 
@@ -318,6 +334,18 @@ struct ContentView: View {
                 .toggleStyle(.switch)
                 .disabled(model.isRunning)
 
+            Toggle("翻译", isOn: $settings.enableTranslation)
+                .toggleStyle(.switch)
+                .disabled(model.isRunning)
+
+            Picker("", selection: $settings.translationService) {
+                Text("Google").tag("google")
+                Text("Bing").tag("bing")
+            }
+            .pickerStyle(.menu)
+            .frame(width: 96)
+            .disabled(model.isRunning || !settings.enableTranslation)
+
             Button {
                 showingSettings = true
             } label: {
@@ -346,7 +374,7 @@ struct ContentView: View {
                 Text(model.selectedFile?.lastPathComponent ?? "拖拽 PDF 或 DOCX 到这里")
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(2)
-                Text(model.selectedFile == nil ? "点击选择文件后会立即开始处理。" : "文件已载入，正在准备转换。")
+                Text(model.selectedFile == nil ? "点击选择文件后会立即开始处理。" : "文件已载入，正在准备处理。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -470,9 +498,9 @@ struct ContentView: View {
         case .running:
             return model.progressMessage
         case .succeeded:
-            return "转换完成"
+            return "处理完成"
         case .failed:
-            return "转换失败"
+            return "处理失败"
         }
     }
 

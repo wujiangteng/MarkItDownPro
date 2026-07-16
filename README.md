@@ -114,6 +114,14 @@ The explicit subcommand form is also supported:
 uv run markitdownpro convert path/to/input.pdf -o path/to/output.md
 ```
 
+Translate the converted Markdown from English to Chinese before writing the
+output. The default service is Google; Bing is also available:
+
+```bash
+uv run markitdownpro path/to/input.pdf --translate
+uv run markitdownpro path/to/input.docx --translate --translation-service bing
+```
+
 ## macOS App
 
 A simple SwiftUI macOS wrapper is available under `macos/MarkItDownProApp/`.
@@ -122,6 +130,8 @@ The app supports:
 
 - Dragging a PDF or DOCX file into the window.
 - Clicking to choose a file; conversion starts immediately after selection.
+- Optionally translating converted English content to Chinese.
+- Choosing Google or Bing when translation is enabled.
 - Choosing a model/cache folder in Settings. The app passes it to the CLI through `MARKITDOWNPRO_CACHE_DIR`, so models do not need to be bundled inside the app.
 - Choosing an output folder in Settings. By default the app writes to `~/Downloads/markitdown-output`.
   Each converted file is saved in its own subfolder under that output folder.
